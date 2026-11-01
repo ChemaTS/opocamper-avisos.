@@ -1,5 +1,5 @@
 // Manda los avisos de OpoCamper. Lo ejecuta una tarea programada de GitHub cada ~10 minutos.
-// Avisos: te retan, hoguera, postal de la semana (lunes) en tu mundo, te han adelantado hoy, racha en peligro (21 h) y domingo por la tarde.
+// Avisos: te retan, hoguera, postal de la semana (lunes) en tu mundo, empujoncito, te han adelantado hoy, racha en peligro (21 h) y domingo por la tarde.
 import { initializeApp, applicationDefault } from 'firebase-admin/app';
 import { getFirestore, Timestamp, FieldValue } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
@@ -160,6 +160,17 @@ if (madrid.weekday === 'Mon' && hour >= 9 && hour < 12 && state.postDay !== toda
     await send(u.id, 'Postales de la semana', body, 'postal-semana');
   }
   patch.postDay = today;
+}
+
+// 7) Empujoncito: un compañero te da un toque porque hoy aún no has estudiado
+{
+  const snap = await db.collection('nudges').where('at', '>', since).where('at', '<=', now).get();
+  for (const d of snap.docs) {
+    const n = d.data();
+    const studied = ((await db.doc(`days/${n.day}/scores/${n.to}`).get()).data()?.minutes ?? 0) > 0;
+    if (studied) continue;
+    await send(n.to, `👉 ${await nameOf(n.from)} te da un empujoncito`, 'Hoy aún no has arrancado. Un bloque de 15 minutos y a por la racha.', `empujon-${d.id}`);
+  }
 }
 
 await stateRef.set({ ...patch, lastRun: now }, { merge: true });
