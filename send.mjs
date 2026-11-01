@@ -1,5 +1,5 @@
 // Manda los avisos de OpoCamper. Lo ejecuta una tarea programada de GitHub cada ~10 minutos.
-// Avisos: te retan, postales, hoguera en tu mundo, te han adelantado hoy, racha en peligro (21 h) y domingo por la tarde.
+// Avisos: te retan, hoguera, postal de la semana (lunes) en tu mundo, te han adelantado hoy, racha en peligro (21 h) y domingo por la tarde.
 import { initializeApp, applicationDefault } from 'firebase-admin/app';
 import { getFirestore, Timestamp, FieldValue } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
@@ -56,26 +56,6 @@ for (const col of ['challenges', 'duels']) {
     const who = await nameOf(c.from);
     const what = col === 'duels' ? 'a un duelo' : c.kind === 'supuesto' ? 'con un supuesto' : 'con una pregunta';
     await send(c.to, `${who} te reta ${what}`, 'Tienes 24 horas para responder. ¡A por ello!', `reto-${d.id}`);
-  }
-}
-
-// 1b) Postales
-{
-  const MSGS = ['¡Ánimo, que tú puedes!', 'Te echo de menos en la hoguera', 'Hoy toca darlo todo', 'Vas como un tiro, sigue así', 'Un bloque más y descansamos', 'Recuerda: junio 2027 es nuestro'];
-  const snap = await db.collection('postcards').where('createdAt', '>', since).where('createdAt', '<=', now).get();
-  let everyone = null;
-  for (const d of snap.docs) {
-    const p = d.data();
-    const who = await nameOf(p.from);
-    const [title, body] = p.kind === 'oro' ? [`${who} ha conseguido un sello de oro`, `Tema ${p.topic}: 10 horas estudiándolo. ¡Mándale una postal!`]
-      : p.kind === 'mundo' ? [`${who} ha completado un mundo`, 'Bronce en todos los temas. ¡Mándale una postal!']
-      : [`${who} te ha mandado una postal`, `«${MSGS[p.msg] ?? ''}»`];
-    let to = [p.to];
-    if (p.to === 'all') {
-      everyone ??= (await db.collection('users').get()).docs.map((u) => u.id);
-      to = everyone.filter((u) => u !== p.from);
-    }
-    for (const uid of to) await send(uid, title, body, `postal-${d.id}`);
   }
 }
 
@@ -168,6 +148,18 @@ if (hour >= 8 && hour < 23) {
     }
     patch.fireSent = fireSent;
   }
+}
+
+// 6) Lunes de 9 a 12 h (una vez): ya están las postales de la semana
+if (madrid.weekday === 'Mon' && hour >= 9 && hour < 12 && state.postDay !== today) {
+  const lw = weekId(prevDay(prevDay(today)));
+  const scored = (await db.collection(`weeks/${lw}/scores`).get()).docs.filter((d) => (d.data().minutes ?? 0) > 0).map((d) => d.id);
+  const users = await db.collection('users').get();
+  for (const u of users.docs) {
+    const body = scored.includes(u.id) ? 'Tu postal con la semana pasada te espera. ¡Mira cómo has ido y aplaude a los demás!' : 'Mira cómo les fue a los demás y aplaude su esfuerzo. ¿Esta semana sales tú?';
+    await send(u.id, 'Postales de la semana', body, 'postal-semana');
+  }
+  patch.postDay = today;
 }
 
 await stateRef.set({ ...patch, lastRun: now }, { merge: true });
