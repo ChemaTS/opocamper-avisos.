@@ -3,6 +3,11 @@ on:
   schedule:
     - cron: '*/10 * * * *'
   workflow_dispatch:
+    inputs:
+      test_admins:
+        description: 'Mandar un aviso de prueba al admin'
+        type: boolean
+        default: false
 concurrency: avisos
 jobs:
   send:
@@ -19,4 +24,7 @@ jobs:
       - name: Mandar avisos
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/sa.json
-        run: node send.mjs 2>&1 | tee out.txt || (echo "::error::$(tail -3 out.txt | tr '\n' ' ')" && exit 1)
+          TEST_ADMINS: ${{ inputs.test_admins }}
+        run: |
+          node send.mjs 2>&1 | tee out.txt || (echo "::error::$(tail -3 out.txt | tr '\n' ' ')" && exit 1)
+          echo "::notice::$(tail -1 out.txt)"

@@ -33,6 +33,12 @@ async function send(uid, title, body, tag) {
   sent += res.successCount;
 }
 
+// 0) Prueba manual: aviso de prueba a los administradores
+if (process.env.TEST_ADMINS === 'true') {
+  const admins = await db.collection('users').where('isAdmin', '==', true).get();
+  for (const u of admins.docs) await send(u.id, 'Prueba de avisos', '¡Los avisos de OpoCamper funcionan!', 'prueba');
+}
+
 // 1) Te retan
 for (const col of ['challenges', 'duels']) {
   const snap = await db.collection(col).where('createdAt', '>', since).where('createdAt', '<=', now).get();
