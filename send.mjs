@@ -1,5 +1,5 @@
 // Manda los avisos de OpoCamper. Lo ejecuta una tarea programada de GitHub cada ~10 minutos.
-// Avisos: te retan, te han adelantado hoy, racha en peligro (21 h) y domingo por la tarde.
+// Avisos: te retan, hoguera en tu mundo, te han adelantado hoy, racha en peligro (21 h) y domingo por la tarde.
 import { initializeApp, applicationDefault } from 'firebase-admin/app';
 import { getFirestore, Timestamp, FieldValue } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
@@ -119,6 +119,35 @@ if (madrid.weekday === 'Sun' && hour >= 18 && hour < 21 && state.weeklyDay !== t
     await send(u.id, 'Última tarde de la semana', body, 'semana');
   }
   patch.weeklyDay = today;
+}
+
+// 5) Hoguera: alguien empieza a estudiar -> aviso al resto (8 a 23 h, como mucho uno cada 3 h por persona)
+if (hour >= 8 && hour < 23) {
+  const WORLD = { luz: 'Luz', fotografia: 'Fotografía', laboratorio: 'Laboratorio', cine: 'Cine', television: 'Televisión', sonido: 'Sonido', radio: 'Radio' };
+  const fresh = (await db.collection('sessions').where('startedAt', '>', since).get()).docs
+    .map((d) => d.data()).filter((s) => s.status === 'open' && !s.test);
+  if (fresh.length) {
+    const alive = (await db.collection('sessions').where('status', '==', 'open').get()).docs
+      .map((d) => d.data()).filter((s) => !s.test && now.toMillis() - (s.lastBumpAt?.toMillis() ?? 0) < 16 * 60_000);
+    const studying = new Set(alive.map((s) => s.uid));
+    const fireSent = { ...(state.fireSent ?? {}) };
+    const users = await db.collection('users').get();
+    for (const u of users.docs) {
+      if (studying.has(u.id) || now.toMillis() - (fireSent[u.id] ?? 0) < 3 * 3600_000) continue;
+      const s = fresh.find((f) => f.uid !== u.id);
+      if (!s) continue;
+      const there = [...new Set(alive.filter((a) => a.world === s.world).map((a) => a.uid))];
+      const who = await Promise.all(there.map(nameOf));
+      const world = WORLD[s.world] ?? s.world;
+      const title = there.length >= 2 ? `Hoguera en ${world}` : `${await nameOf(s.uid)} está estudiando en ${world}`;
+      const body = there.length >= 2
+        ? `${who.join(' y ')} están estudiando juntos. Únete: +15 por choque.`
+        : 'Únete ahora y encended la hoguera: +15 por choque mientras estudiéis a la vez.';
+      await send(u.id, title, body, 'hoguera');
+      fireSent[u.id] = now.toMillis();
+    }
+    patch.fireSent = fireSent;
+  }
 }
 
 await stateRef.set({ ...patch, lastRun: now }, { merge: true });
