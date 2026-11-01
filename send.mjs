@@ -25,7 +25,16 @@ let sent = 0;
 async function send(uid, title, body, tag) {
   const tokens = await tokensOf(uid);
   if (!tokens.length) return;
-  const res = await fcm.sendEachForMulticast({ tokens, data: { title, body, tag, url: '/' }, webpush: { headers: { Urgency: 'high' } } });
+  const res = await fcm.sendEachForMulticast({
+    tokens,
+    data: { title, body, tag, url: '/' },
+    webpush: {
+      headers: { Urgency: 'high' },
+      notification: { title, body, tag, icon: 'https://opocamper.web.app/assets/icono_app_192.png' },
+      fcmOptions: { link: 'https://opocamper.web.app/' },
+    },
+  });
+  console.log(uid, 'ok', res.successCount, 'fallos', res.failureCount, res.responses.filter((r) => !r.success).map((r) => r.error?.code).join(','));
   const dead = res.responses
     .map((r, i) => (!r.success && /registration-token-not-registered|invalid-argument/.test(r.error?.code ?? '') ? tokens[i] : null))
     .filter(Boolean);
