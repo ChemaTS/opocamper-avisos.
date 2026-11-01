@@ -27,4 +27,4 @@ jobs:
           TEST_ADMINS: ${{ inputs.test_admins }}
         run: |
           node send.mjs 2>&1 | tee out.txt || (echo "::error::$(tail -3 out.txt | tr '\n' ' ')" && exit 1)
-          echo "::notice::$(tail -1 out.txt)"
+          while IFS= read -r l; do echo "::notice::$l"; done < out.txt
