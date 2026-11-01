@@ -1,5 +1,5 @@
 // Manda los avisos de OpoCamper. Lo ejecuta una tarea programada de GitHub cada ~10 minutos.
-// Avisos: "te retan" (retos y duelos nuevos) y domingo por la tarde "cierra la semana".
+// Avisos: te retan, te han adelantado hoy, racha en peligro (21 h) y domingo por la tarde.
 import { initializeApp, applicationDefault } from 'firebase-admin/app';
 import { getFirestore, Timestamp, FieldValue } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
@@ -59,16 +59,67 @@ for (const col of ['challenges', 'duels']) {
   }
 }
 
-// 2) Domingo por la tarde (18:00-21:00 hora de Madrid), una vez por semana
+// Hora y fecha de Madrid
 const madrid = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Madrid', weekday: 'short', hour: 'numeric', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit' })
   .formatToParts(new Date()).reduce((o, p) => ((o[p.type] = p.value), o), {});
 const today = `${madrid.year}-${madrid.month}-${madrid.day}`;
-const hour = Number(madrid.hour);
-if (madrid.weekday === 'Sun' && hour >= 18 && hour < 21 && state.weeklyDay !== today) {
-  const users = await db.collection('users').get();
-  for (const u of users.docs) await send(u.id, 'Última tarde de la semana', 'Esta noche se decide el premio semanal. ¿Un último bloque?', 'semana');
-  await stateRef.set({ weeklyDay: today }, { merge: true });
+const hour = Number(madrid.hour) % 24;
+const prevDay = (id) => { const [y, m, d] = id.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d - 1)).toISOString().slice(0, 10); };
+function weekId(id) {
+  const [y, m, day] = id.split('-').map(Number);
+  const date = new Date(Date.UTC(y, m - 1, day));
+  const dow = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - dow);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  return `${date.getUTCFullYear()}-W${String(Math.ceil(((date - yearStart) / 86400000 + 1) / 7)).padStart(2, '0')}`;
+}
+const ranking = async (path) => (await db.collection(path).get()).docs
+  .map((d) => ({ uid: d.id, points: d.data().points ?? 0 }))
+  .filter((r) => r.points > 0)
+  .sort((a, b) => b.points - a.points);
+const patch = {};
+
+// 2) Te han adelantado hoy (al que iba primero, como mucho una vez al día, de 9 a 22 h)
+if (hour >= 9 && hour < 22) {
+  const day = await ranking(`days/${today}/scores`);
+  const leader = day[0]?.uid ?? null;
+  const prev = state.leader?.day === today ? state.leader.uid : null;
+  const notified = state.overtaken?.day === today ? state.overtaken.uids ?? [] : [];
+  if (leader && prev && prev !== leader && !notified.includes(prev)) {
+    const mine = day.find((r) => r.uid === prev)?.points ?? 0;
+    await send(prev, `${await nameOf(leader)} te ha adelantado hoy`, `Va ${day[0].points - mine} puntos por delante. ¿Un bloque más para recuperar la banderita?`, 'adelantado');
+    patch.overtaken = { day: today, uids: [...notified, prev] };
+  }
+  patch.leader = { day: today, uid: leader };
 }
 
-await stateRef.set({ lastRun: now }, { merge: true });
+// 3) Racha en peligro (21 h, una vez al día): racha viva que hoy aún no ha contado
+if (hour === 21 && state.streakDay !== today) {
+  const users = await db.collection('users').where('streak', '>', 0).get();
+  for (const u of users.docs) {
+    const p = u.data();
+    if (p.lastStreakDay === today || p.lastStreakDay !== prevDay(today)) continue;
+    const extra = p.lifelinesSaved > 0 ? ' Si no, gastarás un salvavidas.' : '';
+    await send(u.id, `Tu racha de ${p.streak} días está en peligro`, `Un choque de puños, un reto o el reto del día y la salvas.${extra}`, 'racha');
+  }
+  patch.streakDay = today;
+}
+
+// 4) Domingo por la tarde (18-21 h, una vez): cómo vas en la semana
+if (madrid.weekday === 'Sun' && hour >= 18 && hour < 21 && state.weeklyDay !== today) {
+  const week = await ranking(`weeks/${weekId(today)}/scores`);
+  const users = await db.collection('users').get();
+  for (const u of users.docs) {
+    const pos = week.findIndex((r) => r.uid === u.id);
+    const body = pos === 0
+      ? `Vas primero${week[1] ? ` con ${week[0].points - week[1].points} puntos de ventaja` : ''}. Esta noche se decide el premio: ¡aguanta!`
+      : pos > 0
+        ? `Vas ${pos + 1}º, a ${week[0].points - week[pos].points} puntos de ${await nameOf(week[0].uid)}. Esta noche se decide el premio.`
+        : 'Esta noche se decide el premio semanal. ¿Un último bloque?';
+    await send(u.id, 'Última tarde de la semana', body, 'semana');
+  }
+  patch.weeklyDay = today;
+}
+
+await stateRef.set({ ...patch, lastRun: now }, { merge: true });
 console.log('Avisos enviados:', sent);
