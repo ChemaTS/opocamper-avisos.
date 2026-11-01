@@ -1,0 +1,7 @@
+{
+  "name": "opocamper-avisos",
+  "private": true,
+  "type": "module",
+  "scripts": { "send": "node send.mjs" },
+  "dependencies": { "firebase-admin": "^13.5.0" }
+}
