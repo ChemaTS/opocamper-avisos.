@@ -1,0 +1,31 @@
+name: Reiniciar curso OpoCamper
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'keep_pet (todo a cero, conserva mascota) | no_pet | full (borra usuarios)'
+        default: keep_pet
+      confirm:
+        description: 'Escribe REINICIAR para borrar de verdad (si no, solo cuenta)'
+        default: ''
+concurrency: avisos
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - name: Credenciales
+        run: echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > "$RUNNER_TEMP/sa.json"
+      - name: Reiniciar
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/sa.json
+          MODE: ${{ inputs.mode }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          node reset.mjs 2>&1 | tee out.txt || (echo "::error::$(tail -3 out.txt | tr '\n' ' ')" && exit 1)
+          while IFS= read -r l; do echo "::notice::$l"; done < out.txt
