@@ -1,5 +1,6 @@
 // Manda los avisos de OpoCamper. Lo ejecuta una tarea programada de GitHub cada ~10 minutos.
 // Avisos: te retan, hoguera, postal de la semana (lunes) en tu mundo, empujoncito, te han adelantado hoy, racha en peligro (21 h) y domingo por la tarde.
+// Además reparte los premios del Gran Premio al cerrar cada semana.
 import { initializeApp, applicationDefault } from 'firebase-admin/app';
 import { getFirestore, Timestamp, FieldValue } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
@@ -170,6 +171,62 @@ if (madrid.weekday === 'Mon' && hour >= 9 && hour < 12 && state.postDay !== toda
     const studied = ((await db.doc(`days/${n.day}/scores/${n.to}`).get()).data()?.minutes ?? 0) > 0;
     if (studied) continue;
     await send(n.to, `👉 ${await nameOf(n.from)} te da un empujoncito`, 'Hoy aún no has arrancado. Un bloque de 15 minutos y a por la racha.', `empujon-${d.id}`);
+  }
+}
+
+// 8) Gran Premio: al cerrar (domingo 21:00) reparte premios. Todo se recalcula desde las respuestas guardadas,
+// con las mismas reglas que la app (src/lib/gp.ts). Una pregunta retirada no cuenta para nadie.
+{
+  const GAIN = { n: [3, 10], t: [-15, 25] }, TURBO_NEED = 2, PRIZE = [180, 120, 60, 20], BONUS = 25;
+  const open = (await db.collection('gp').where('closesAt', '<=', now).get()).docs.filter((d) => !d.data().settled);
+  if (open.length) {
+    const reports = (await db.collection('reports').get()).docs.map((d) => d.data());
+    const voided = new Set(reports.filter((r) => r.status === 'descartada' || (r.status === 'open' && 1 + Object.keys(r.extra ?? {}).length >= 2)).map((r) => r.qid));
+    for (const g of open) {
+      const gp = g.data();
+      const runs = (await g.ref.collection('runs').get()).docs.map((d) => d.data()).filter((r) => r.done || Object.keys(r.a ?? {}).length);
+      const rows = runs.map((r) => {
+        let m = 0, secs = 0, streak = 0;
+        for (let i = 0; i < gp.qids.length; i++) {
+          const a = r.a?.[String(i)];
+          if (!a) continue;
+          const [c0, ok, s] = a;
+          secs += Math.min(30, Math.max(0, s ?? 30));
+          if (voided.has(gp.qids[i])) continue;
+          const c = c0 === 't' && streak < TURBO_NEED ? 'n' : c0;
+          m = Math.max(0, m + GAIN[c][ok ? 1 : 0]);
+          streak = c === 't' || !ok ? 0 : streak + 1;
+        }
+        return { uid: r.uid, m, secs, at: r.startedAt?.toMillis() ?? 0, bonus: 0 };
+      });
+      // Récord: el que va primero en cada momento se lleva 25 por cada uno que no le supera.
+      let holder = null;
+      for (const r of [...rows].sort((a, b) => a.at - b.at)) {
+        if (holder && (r.m < holder.m || (r.m === holder.m && r.secs >= holder.secs))) holder.bonus += BONUS;
+        else holder = r;
+      }
+      rows.sort((a, b) => b.m - a.m || a.secs - b.secs);
+      const paid = rows.length >= 2;
+      const results = rows.map((r, i) => ({ uid: r.uid, m: r.m, secs: r.secs, pos: i + 1, prize: paid ? PRIZE[Math.min(i, PRIZE.length - 1)] : 0, bonus: r.bonus }));
+      const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Madrid' }).format(gp.closesAt.toDate());
+      const b = db.batch();
+      for (const r of results) {
+        const gain = r.prize + r.bonus;
+        if (gain <= 0) continue;
+        const data = { uid: r.uid, sessionId: `gp:${gp.week}`, points: FieldValue.increment(gain), minutes: FieldValue.increment(0), bumps: FieldValue.increment(0) };
+        b.update(db.doc(`users/${r.uid}`), { points: FieldValue.increment(gain) });
+        b.set(db.doc(`days/${day}/scores/${r.uid}`), data, { merge: true });
+        b.set(db.doc(`weeks/${gp.week}/scores/${r.uid}`), data, { merge: true });
+      }
+      b.update(g.ref, { settled: true, results, settledAt: now });
+      if (results.length) {
+        const w = results[0];
+        const text = paid ? `🏁 ¡Gana el Gran Premio con ${w.m} m! Se lleva ${w.prize + w.bonus} puntos.` : `🏁 Corre solo el Gran Premio: ${w.m} m.`;
+        b.set(db.collection('feed').doc(), { uid: w.uid, kind: 'win', text, tags: [], at: now, r: {} });
+      }
+      await b.commit();
+      console.log('Gran Premio', gp.week, 'repartido:', results.map((r) => `${r.uid}:${r.m}m+${r.prize}+${r.bonus}`).join(' '));
+    }
   }
 }
 
