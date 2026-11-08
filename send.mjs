@@ -186,16 +186,20 @@ if (madrid.weekday === 'Mon' && hour >= 9 && hour < 12 && state.postDay !== toda
       const gp = g.data();
       const runs = (await g.ref.collection('runs').get()).docs.map((d) => d.data()).filter((r) => r.done || Object.keys(r.a ?? {}).length);
       const rows = runs.map((r) => {
-        let m = 0, secs = 0, streak = 0;
+        // Turbo cargado con 2 aciertos seguidos o con un acierto rápido (gp.fast[i] segundos o menos).
+        let m = 0, secs = 0, streak = 0, charged = false;
         for (let i = 0; i < gp.qids.length; i++) {
           const a = r.a?.[String(i)];
           if (!a) continue;
-          const [c0, ok, s] = a;
-          secs += Math.min(30, Math.max(0, s ?? 30));
+          const [c0, ok0, s0] = a;
+          const ok = ok0 ? 1 : 0, s = Math.min(30, Math.max(0, s0 ?? 30));
+          secs += s;
           if (voided.has(gp.qids[i])) continue;
-          const c = c0 === 't' && streak < TURBO_NEED ? 'n' : c0;
-          m = Math.max(0, m + GAIN[c][ok ? 1 : 0]);
+          const c = c0 === 't' && !charged ? 'n' : c0;
+          const quick = !!ok && gp.fast?.[i] != null && s <= gp.fast[i];
+          m = Math.max(0, m + GAIN[c][ok]);
           streak = c === 't' || !ok ? 0 : streak + 1;
+          charged = quick || (c === 'n' && streak >= TURBO_NEED);
         }
         return { uid: r.uid, m, secs, at: r.startedAt?.toMillis() ?? 0, bonus: 0 };
       });
