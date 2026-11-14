@@ -1,6 +1,6 @@
 // Manda los avisos de OpoCamper. Lo ejecuta una tarea programada de GitHub cada ~10 minutos.
 // Avisos: te retan, hoguera, postal de la semana (lunes) en tu mundo, empujoncito, te han adelantado hoy, racha en peligro (21 h) y domingo por la tarde.
-// Además reparte los premios del Gran Premio al cerrar cada semana.
+// Además reparte los premios del Gran Premio al cerrar cada semana y cobra los compromisos de la semana.
 import { initializeApp, applicationDefault } from 'firebase-admin/app';
 import { getFirestore, Timestamp, FieldValue } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
@@ -231,6 +231,33 @@ if (madrid.weekday === 'Mon' && hour >= 9 && hour < 12 && state.postDay !== toda
       await b.commit();
       console.log('Gran Premio', gp.week, 'repartido:', results.map((r) => `${r.uid}:${r.m}m+${r.prize}+${r.bonus}`).join(' '));
     }
+  }
+}
+
+// 9) Compromiso de la semana: al acabar la semana, el que cumplió sus horas recupera el doble;
+// el que no, su apuesta va al bote del grupo (tope 600, como en la app). No cuenta para la carrera.
+{
+  const POT_MAX = 600;
+  const thisWeek = weekId(today);
+  const open = (await db.collection('pledges').where('status', '==', 'open').get()).docs.filter((d) => d.data().week < thisWeek);
+  for (const d of open) {
+    const pl = d.data();
+    const minutes = (await db.doc(`weeks/${pl.week}/scores/${pl.uid}`).get()).data()?.minutes ?? 0;
+    const won = minutes >= pl.hours * 60;
+    await db.runTransaction(async (t) => {
+      const fresh = await t.get(d.ref);
+      if (fresh.data()?.status !== 'open') return;
+      const potRef = db.doc('pot/main');
+      const pot = won ? null : (await t.get(potRef)).data()?.amount ?? 0;
+      if (won) {
+        t.update(db.doc(`users/${pl.uid}`), { points: FieldValue.increment(pl.stake * 2) });
+        t.set(db.collection('feed').doc(), { uid: pl.uid, kind: 'win', text: `🤝 Cumplió su compromiso: ${pl.hours} h en la semana. Se lleva ${pl.stake * 2} puntos.`, tags: [], at: now, r: {} });
+      } else {
+        t.set(potRef, { amount: Math.min(POT_MAX, pot + pl.stake) }, { merge: true });
+      }
+      t.update(d.ref, { status: won ? 'won' : 'lost', minutes, settledAt: now });
+    });
+    console.log('Compromiso', d.id, won ? 'cumplido' : 'no cumplido', minutes, 'min de', pl.hours * 60);
   }
 }
 
